@@ -3,8 +3,11 @@ require 'shoulda/context'
 module ShouldaContextExtensions
   def self.included(base)
     base.class_eval do
-      alias_method_chain :build, :fast_context
-      alias_method_chain :am_subcontext?, :fast_context
+      alias_method :build_without_fast_context, :build
+      alias_method :build, :build_with_fast_context
+      
+      alias_method :am_subcontext_without_fast_context?, :am_subcontext?
+      alias_method :am_subcontext?, :am_subcontext_with_fast_context?
     end
   end
 
@@ -54,7 +57,7 @@ module Shoulda
 
           context.shoulds.each {|should| should[:block].bind(self).call }
         rescue Test::Unit::AssertionFailedError => e
-          error = Test::Unit::AssertionFailedError.new(["FAILED:", context.full_name, "should", "#{@current_should[:name]}:", e.message].flatten.join(' '))
+          error = Test::Unit::AssertionFailedError.new(["test:", context.full_name, "should", "#{@current_should[:name]}:", e.message].flatten.join(' '))
           error.set_backtrace e.backtrace
           raise error
         ensure
@@ -75,15 +78,38 @@ module Shoulda
   end
 end
 
-class ActiveSupport::TestCase
-  def self.fast_context(name, &blk)
-    if Shoulda.current_context
-      Shoulda.current_context.fast_context(name, &blk)
-    else
-      context = Shoulda::FastContext.new(name, self, &blk)
-      context.build
+module FastContextMethods
+  def self.included(base)
+    base.class_eval do
+      def self.fast_context(name, &blk)
+        if Shoulda.current_context
+          Shoulda.current_context.fast_context(name, &blk)
+        else
+          context = Shoulda::FastContext.new(name, self, &blk)
+          context.build
+        end
+      end
     end
-  end  
+  end
 end
+
+module TestUnitOutputHelpers
+  def self.included(base)
+    base.class_eval do    
+      alias_method :add_failure_without_fast_context, :add_failure                  
+      alias_method :add_failure, :add_failure_with_fast_context
+    end         
+  end  
+  
+  def add_failure_with_fast_context(message, all_locations=caller())
+    message_name = name.include?('run_fast') ? name : message
+    @test_passed = false
+    @_result.add_failure(Test::Unit::Failure.new(message, filter_backtrace(all_locations), nil))        
+  end
+end
+
+ActiveSupport::TestCase.send(:include, FastContextMethods) if defined? ActiveSupport::TestCase
+Test::Unit::TestCase.send(:include, FastContextMethods) if defined? Test::Unit::TestCase
+Test::Unit::TestCase.send(:include, TestUnitOutputHelpers)
 
 Shoulda::Context.send :include, ShouldaContextExtensions
